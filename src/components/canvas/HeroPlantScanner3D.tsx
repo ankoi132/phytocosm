@@ -13,7 +13,7 @@ export default function HeroPlantScanner3D() {
 
     // Scene, Camera, Renderer
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x030704, 0.055);
+    scene.fog = new THREE.FogExp2(0x030704, 0.05);
 
     const camera = new THREE.PerspectiveCamera(
       45,
@@ -21,16 +21,16 @@ export default function HeroPlantScanner3D() {
       0.1,
       100
     );
-    camera.position.set(0, 1.2, 5.2);
+    camera.position.set(0, 1.1, 5.0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMappingExposure = 1.25;
     container.appendChild(renderer.domElement);
 
-    // Group for the entire rotating specimen
+    // Group for the entire rotating holographic specimen
     const specimenGroup = new THREE.Group();
     scene.add(specimenGroup);
 
@@ -38,139 +38,186 @@ export default function HeroPlantScanner3D() {
     const stemCurve = new THREE.CatmullRomCurve3([
       new THREE.Vector3(0, -2.0, 0),
       new THREE.Vector3(0.08, -1.0, 0.04),
-      new THREE.Vector3(-0.06, 0.0, -0.05),
-      new THREE.Vector3(0.12, 1.0, 0.08),
+      new THREE.Vector3(-0.06, 0.0, -0.04),
+      new THREE.Vector3(0.1, 1.0, 0.06),
       new THREE.Vector3(0.0, 1.8, 0),
     ]);
-    const stemGeom = new THREE.TubeGeometry(stemCurve, 64, 0.07, 16, false);
+    const stemGeom = new THREE.TubeGeometry(stemCurve, 64, 0.075, 16, false);
     const stemMat = new THREE.MeshPhysicalMaterial({
       color: 0x15803d,
       roughness: 0.35,
       metalness: 0.1,
-      clearcoat: 0.5,
+      clearcoat: 0.6,
       clearcoatRoughness: 0.2,
       emissive: 0x052e16,
-      emissiveIntensity: 0.4,
+      emissiveIntensity: 0.45,
     });
     const stemMesh = new THREE.Mesh(stemGeom, stemMat);
     specimenGroup.add(stemMesh);
 
-    // 2. Multi-tier Broad Organic Leaves
-    const leafGeom = new THREE.CylinderGeometry(0.02, 0.75, 1.8, 32, 16, false);
-    // Sculpt leaf shape by deforming vertices
-    const pos = leafGeom.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i);
-      const factor = Math.sin(((y + 0.9) / 1.8) * Math.PI);
-      pos.setX(i, pos.getX(i) * factor * 1.6);
-      pos.setZ(i, pos.getZ(i) * 0.12 * factor);
-    }
-    leafGeom.computeVertexNormals();
-
+    // 2. High-Fidelity Extruded Monstera Leaves with Fenestration Holes
     const leafMat = new THREE.MeshPhysicalMaterial({
       color: 0x10b981,
-      roughness: 0.3,
+      roughness: 0.28,
       metalness: 0.05,
-      transmission: 0.35, // Subsurface light transmission
+      transmission: 0.35,
       thickness: 0.5,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.2,
+      clearcoat: 0.75,
+      clearcoatRoughness: 0.18,
       emissive: 0x064e3b,
-      emissiveIntensity: 0.3,
+      emissiveIntensity: 0.35,
       side: THREE.DoubleSide,
     });
 
     const leafConfigs = [
-      { y: 0.2, rotY: 0, rotZ: 0.65, scale: 1.1 },
-      { y: 0.6, rotY: Math.PI * 0.7, rotZ: 0.6, scale: 0.95 },
-      { y: 1.0, rotY: Math.PI * 1.4, rotZ: 0.55, scale: 0.8 },
-      { y: -0.4, rotY: Math.PI * 0.35, rotZ: 0.75, scale: 1.25 },
-      { y: -0.8, rotY: Math.PI * 1.1, rotZ: 0.7, scale: 1.3 },
-      { y: 1.5, rotY: Math.PI * 0.2, rotZ: 0.35, scale: 0.65 },
+      { y: 0.3, rotY: 0, rotZ: 0.65, scale: 0.85 },
+      { y: 0.8, rotY: Math.PI * 0.7, rotZ: 0.6, scale: 0.75 },
+      { y: 1.2, rotY: Math.PI * 1.4, rotZ: 0.55, scale: 0.65 },
+      { y: -0.3, rotY: Math.PI * 0.35, rotZ: 0.75, scale: 0.95 },
+      { y: -0.8, rotY: Math.PI * 1.1, rotZ: 0.7, scale: 1.0 },
+      { y: 1.6, rotY: Math.PI * 0.2, rotZ: 0.4, scale: 0.55 },
     ];
 
     leafConfigs.forEach((cfg) => {
-      const leaf = new THREE.Mesh(leafGeom, leafMat);
-      leaf.position.y = cfg.y;
-      leaf.rotation.y = cfg.rotY;
-      leaf.rotation.z = cfg.rotZ;
-      leaf.scale.set(cfg.scale, cfg.scale, cfg.scale);
-      specimenGroup.add(leaf);
+      const leafAssembly = new THREE.Group();
+
+      const leafShape = new THREE.Shape();
+      leafShape.moveTo(0, 0);
+      leafShape.bezierCurveTo(0.35, 0.25, 0.75, 0.65, 0.68, 1.25);
+      leafShape.bezierCurveTo(0.6, 1.65, 0.25, 2.05, 0, 2.3);
+      leafShape.bezierCurveTo(-0.25, 2.05, -0.6, 1.65, -0.68, 1.25);
+      leafShape.bezierCurveTo(-0.75, 0.65, -0.35, 0.25, 0, 0);
+
+      // Fenestration cutouts
+      const holeConfigs = [
+        { x: 0.22, y: 0.7, rx: 0.06, ry: 0.16, rot: 0.2 },
+        { x: 0.28, y: 1.2, rx: 0.08, ry: 0.22, rot: 0.15 },
+        { x: -0.22, y: 0.7, rx: 0.06, ry: 0.16, rot: -0.2 },
+        { x: -0.28, y: 1.2, rx: 0.08, ry: 0.22, rot: -0.15 },
+      ];
+
+      holeConfigs.forEach((h) => {
+        const holePath = new THREE.Path();
+        holePath.absellipse(h.x, h.y, h.rx, h.ry, 0, Math.PI * 2, true, h.rot);
+        leafShape.holes.push(holePath);
+      });
+
+      const leafGeom = new THREE.ExtrudeGeometry(leafShape, {
+        depth: 0.015,
+        bevelEnabled: true,
+        bevelSegments: 2,
+        steps: 1,
+        bevelSize: 0.006,
+        bevelThickness: 0.006,
+      });
+
+      const leafMesh = new THREE.Mesh(leafGeom, leafMat);
+      leafMesh.rotation.x = -Math.PI / 2.3;
+      leafAssembly.add(leafMesh);
+
+      // Midrib
+      const midribMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.015, 0.025, 2.2, 10),
+        new THREE.MeshStandardMaterial({ color: 0x86efac, roughness: 0.35 })
+      );
+      midribMesh.position.set(0, 1.1, 0.02);
+      leafMesh.add(midribMesh);
+
+      leafAssembly.position.y = cfg.y;
+      leafAssembly.rotation.y = cfg.rotY;
+      leafAssembly.rotation.z = cfg.rotZ;
+      leafAssembly.scale.set(cfg.scale, cfg.scale, cfg.scale);
+
+      specimenGroup.add(leafAssembly);
     });
 
     // 3. Volumetric Scanning Ring Plane (Cinematic laser tomography)
-    const scanRingGeom = new THREE.RingGeometry(1.6, 1.72, 64);
+    const scanRingGeom = new THREE.RingGeometry(1.65, 1.76, 64);
     const scanRingMat = new THREE.MeshBasicMaterial({
       color: 0x06b6d4,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.75,
     });
     const scanRing = new THREE.Mesh(scanRingGeom, scanRingMat);
     scanRing.rotation.x = Math.PI / 2;
     scene.add(scanRing);
 
-    // Inner scanning disk
-    const scanDiskGeom = new THREE.CircleGeometry(1.6, 64);
+    // Inner scanning glowing disk
+    const scanDiskGeom = new THREE.CircleGeometry(1.65, 64);
     const scanDiskMat = new THREE.MeshBasicMaterial({
       color: 0x06b6d4,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.08,
+      opacity: 0.09,
       blending: THREE.AdditiveBlending,
     });
     const scanDisk = new THREE.Mesh(scanDiskGeom, scanDiskMat);
     scanDisk.rotation.x = Math.PI / 2;
     scene.add(scanDisk);
 
+    // Second counter-rotating telemetry ring
+    const telemetryRingGeom = new THREE.RingGeometry(1.85, 1.88, 48);
+    const telemetryRingMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const telemetryRing = new THREE.Mesh(telemetryRingGeom, telemetryRingMat);
+    telemetryRing.rotation.x = Math.PI / 2;
+    scene.add(telemetryRing);
+
     // 4. Bioluminescent Floating Spores / Nanoparticles
-    const particleCount = 280;
+    const particleCount = 320;
     const particleGeom = new THREE.BufferGeometry();
     const particlePositions = new Float32Array(particleCount * 3);
     const particleSpeeds = new Float32Array(particleCount);
 
     for (let i = 0; i < particleCount; i++) {
       const theta = Math.random() * Math.PI * 2;
-      const radius = 0.5 + Math.random() * 2.2;
+      const radius = 0.5 + Math.random() * 2.4;
       particlePositions[i * 3] = Math.cos(theta) * radius;
-      particlePositions[i * 3 + 1] = (Math.random() - 0.5) * 4.0;
+      particlePositions[i * 3 + 1] = (Math.random() - 0.5) * 4.2;
       particlePositions[i * 3 + 2] = Math.sin(theta) * radius;
-      particleSpeeds[i] = 0.003 + Math.random() * 0.008;
+      particleSpeeds[i] = 0.004 + Math.random() * 0.009;
     }
     particleGeom.setAttribute("position", new THREE.BufferAttribute(particlePositions, 3));
 
     const particleMat = new THREE.PointsMaterial({
       color: 0x34d399,
-      size: 0.045,
+      size: 0.048,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.8,
       blending: THREE.AdditiveBlending,
     });
     const particleSystem = new THREE.Points(particleGeom, particleMat);
     scene.add(particleSystem);
 
     // 5. Lighting Setup
-    const ambientLight = new THREE.AmbientLight(0x064e3b, 1.2);
+    const ambientLight = new THREE.AmbientLight(0x064e3b, 1.3);
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xecfdf5, 2.5);
+    const keyLight = new THREE.DirectionalLight(0xecfdf5, 2.6);
     keyLight.position.set(4, 5, 4);
     scene.add(keyLight);
 
-    const rimCyanLight = new THREE.PointLight(0x06b6d4, 3.5, 8);
+    const rimCyanLight = new THREE.PointLight(0x06b6d4, 3.8, 9);
     rimCyanLight.position.set(-3, 1, -2);
     scene.add(rimCyanLight);
 
-    const emeraldGlow = new THREE.PointLight(0x10b981, 2.5, 6);
+    const emeraldGlow = new THREE.PointLight(0x10b981, 2.8, 7);
     emeraldGlow.position.set(0, -1, 2);
     scene.add(emeraldGlow);
 
-    // Mouse / Touch Interactivity
+    // Mouse / Touch Interactivity with Smooth Parallax & Orbit
     let isDragging = false;
     let prevMouseX = 0;
     let prevMouseY = 0;
     let targetRotY = 0;
     let targetRotX = 0;
+    let mouseParallaxX = 0;
+    let mouseParallaxY = 0;
 
     const onMouseDown = (e: MouseEvent) => {
       isDragging = true;
@@ -180,6 +227,12 @@ export default function HeroPlantScanner3D() {
     };
 
     const onMouseMove = (e: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const normX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const normY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+      mouseParallaxX = normX * 0.15;
+      mouseParallaxY = normY * 0.1;
+
       if (!isDragging) return;
       const deltaX = e.clientX - prevMouseX;
       const deltaY = e.clientY - prevMouseY;
@@ -207,23 +260,25 @@ export default function HeroPlantScanner3D() {
       animationFrameId = requestAnimationFrame(animate);
       const elapsed = clock.getElapsedTime();
 
-      // Specimen idle rotation + user drag interpolation
-      specimenGroup.rotation.y += 0.004;
+      // Specimen idle rotation + drag rotation + mouse parallax tilt
+      specimenGroup.rotation.y += 0.0035;
       specimenGroup.rotation.y += (targetRotY - specimenGroup.rotation.y) * 0.05;
-      specimenGroup.rotation.x += (targetRotX - specimenGroup.rotation.x) * 0.05;
+      specimenGroup.rotation.x += (targetRotX + mouseParallaxY - specimenGroup.rotation.x) * 0.05;
+      specimenGroup.rotation.z += (mouseParallaxX - specimenGroup.rotation.z) * 0.05;
 
       // Laser scanning ring oscillation
-      const scanY = Math.sin(elapsed * 1.5) * 1.6;
+      const scanY = Math.sin(elapsed * 1.4) * 1.7;
       scanRing.position.y = scanY;
       scanDisk.position.y = scanY;
       scanRing.rotation.z += 0.008;
+      telemetryRing.rotation.z -= 0.006;
 
       // Particle floating drift
       const positions = particleGeom.attributes.position.array as Float32Array;
       for (let i = 0; i < particleCount; i++) {
         positions[i * 3 + 1] += particleSpeeds[i];
-        if (positions[i * 3 + 1] > 2.2) {
-          positions[i * 3 + 1] = -2.0;
+        if (positions[i * 3 + 1] > 2.3) {
+          positions[i * 3 + 1] = -2.1;
         }
       }
       particleGeom.attributes.position.needsUpdate = true;
@@ -233,7 +288,6 @@ export default function HeroPlantScanner3D() {
 
     animate();
 
-    // Resize Handler
     const handleResize = () => {
       if (!container) return;
       camera.aspect = container.clientWidth / container.clientHeight;
@@ -256,7 +310,7 @@ export default function HeroPlantScanner3D() {
   }, []);
 
   return (
-    <div className="relative w-full h-[520px] md:h-[640px] cursor-grab active:cursor-grabbing select-none">
+    <div className="relative w-full h-[540px] md:h-[660px] cursor-grab active:cursor-grabbing select-none">
       <div ref={mountRef} className="w-full h-full" />
       {/* HUD Scanner Data Overlay */}
       <div className="absolute top-4 left-4 pointer-events-none flex flex-col gap-1">
@@ -267,7 +321,7 @@ export default function HeroPlantScanner3D() {
           </span>
         </div>
         <span className="text-[11px] text-zinc-400 font-mono">
-          Tomography: 120 Slice Planes / s | λ = 532 nm Laser
+          Tomography: 120 Slice Planes / s | λ = 532 nm Laser | High-Fidelity Fenestration Mesh
         </span>
       </div>
 
