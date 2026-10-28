@@ -86,7 +86,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 npm run build
 npm start
 ```
-
+frasssssssss
 ---
 
 ## ⚡ Deployment on Vercel
