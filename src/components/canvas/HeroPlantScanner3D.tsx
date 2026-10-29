@@ -3,6 +3,34 @@
 import React, { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { sound } from "@/utils/audio";
+import { getLeafMicroTexture } from "@/utils/proceduralTextures";
+
+function applyOrganicCurvature(
+  geom: THREE.BufferGeometry,
+  droopFactor: number = 0.2,
+  cupFactor: number = 0.08,
+  waveFactor: number = 0.018
+) {
+  const pos = geom.attributes.position;
+  geom.computeBoundingBox();
+  const bbox = geom.boundingBox!;
+  const height = bbox.max.y - bbox.min.y || 1.0;
+  const minY = bbox.min.y;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+
+    const progressY = Math.max(0, Math.min(1, (y - minY) / height));
+    const droop = -droopFactor * Math.pow(progressY, 2.2);
+    const cup = cupFactor * Math.pow(x, 2);
+    const wave = Math.sin(progressY * 12) * waveFactor * Math.abs(x);
+
+    pos.setZ(i, z + droop + cup + wave);
+  }
+  geom.computeVertexNormals();
+}
 
 export default function HeroPlantScanner3D() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -55,15 +83,18 @@ export default function HeroPlantScanner3D() {
     const stemMesh = new THREE.Mesh(stemGeom, stemMat);
     specimenGroup.add(stemMesh);
 
-    // 2. High-Fidelity Extruded Monstera Leaves with Fenestration Holes
+    // 2. High-Fidelity Extruded Monstera Leaves with Fenestration Holes & Organic Curvature
+    const leafMicro = getLeafMicroTexture();
     const leafMat = new THREE.MeshPhysicalMaterial({
       color: 0x10b981,
-      roughness: 0.28,
+      roughness: 0.26,
       metalness: 0.05,
-      transmission: 0.35,
-      thickness: 0.5,
+      transmission: 0.38,
+      thickness: 0.6,
       clearcoat: 0.75,
       clearcoatRoughness: 0.18,
+      bumpMap: leafMicro.bump,
+      bumpScale: 0.012,
       emissive: 0x064e3b,
       emissiveIntensity: 0.35,
       side: THREE.DoubleSide,
@@ -110,6 +141,9 @@ export default function HeroPlantScanner3D() {
         bevelSize: 0.006,
         bevelThickness: 0.006,
       });
+
+      // Apply organic curvature
+      applyOrganicCurvature(leafGeom, 0.22, 0.08, 0.016);
 
       const leafMesh = new THREE.Mesh(leafGeom, leafMat);
       leafMesh.rotation.x = -Math.PI / 2.3;

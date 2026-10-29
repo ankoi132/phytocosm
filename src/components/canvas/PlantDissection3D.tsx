@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { PlantSpecimen, HotspotPin } from "@/data/plants";
 import { sound } from "@/utils/audio";
+import { getLeafMicroTexture, getBarkMicroTexture } from "@/utils/proceduralTextures";
 
 export interface DissectionControlsHandle {
   captureSnapshot: () => void;
@@ -32,6 +33,37 @@ interface Props {
     phloem: boolean;
     pith: boolean;
   };
+}
+
+// Organic double curvature transformer: gives flat extrusions natural compound droop, cupping, and margin waves
+function applyOrganicCurvature(
+  geom: THREE.BufferGeometry,
+  droopFactor: number = 0.15,
+  cupFactor: number = 0.08,
+  waveFactor: number = 0.02
+) {
+  const pos = geom.attributes.position;
+  geom.computeBoundingBox();
+  const bbox = geom.boundingBox!;
+  const height = bbox.max.y - bbox.min.y || 1.0;
+  const minY = bbox.min.y;
+
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+
+    const progressY = Math.max(0, Math.min(1, (y - minY) / height));
+    // Parabolic longitudinal droop
+    const droop = -droopFactor * Math.pow(progressY, 2.2);
+    // Transverse cupping along midrib
+    const cup = cupFactor * Math.pow(x, 2);
+    // Sinusoidal leaf margin wave
+    const wave = Math.sin(progressY * 12) * waveFactor * Math.abs(x);
+
+    pos.setZ(i, z + droop + cup + wave);
+  }
+  geom.computeVertexNormals();
 }
 
 const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function PlantDissection3D(
@@ -64,8 +96,14 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
   const vascularSystemRef = useRef<THREE.Points | null>(null);
   const hotspotMeshesRef = useRef<{ mesh: THREE.Mesh; pin: HotspotPin }[]>([]);
 
+  // Smooth camera position and target lerp references
+  const targetCamPosRef = useRef<THREE.Vector3>(new THREE.Vector3(2.8, 1.8, 4.2));
+  const targetLookAtRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0.2, 0));
+
+  // Live raycast hover probe state
+  const [hoveredTissue, setHoveredTissue] = useState<string | null>(null);
+
   // Trap animation state for Dionaea
-  const [trapAngle, setTrapAngle] = useState<number>(0.85); // 0.85 open, 0.08 closed
   const targetTrapAngleRef = useRef<number>(0.85);
   const trapLobeRefs = useRef<{ left: THREE.Group; right: THREE.Group }[]>([]);
 
@@ -81,22 +119,20 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
       a.click();
     },
     setCameraPreset: (preset) => {
-      if (!controlsRef.current || !cameraRef.current) return;
       sound.playSliceClick();
       if (preset === "macro") {
-        cameraRef.current.position.set(2.8, 1.8, 4.2);
-        controlsRef.current.target.set(0, 0.2, 0);
+        targetCamPosRef.current.set(2.8, 1.8, 4.2);
+        targetLookAtRef.current.set(0, 0.2, 0);
       } else if (preset === "crossSection") {
-        cameraRef.current.position.set(0.0, 0.8, 2.8);
-        controlsRef.current.target.set(0, 0.2, 0);
+        targetCamPosRef.current.set(0.0, 0.85, 2.7);
+        targetLookAtRef.current.set(0, 0.2, 0);
       } else if (preset === "leafSurface") {
-        cameraRef.current.position.set(0.8, 1.2, 1.6);
-        controlsRef.current.target.set(0.2, 0.9, 0.1);
+        targetCamPosRef.current.set(0.75, 1.15, 1.6);
+        targetLookAtRef.current.set(0.2, 0.85, 0.1);
       } else if (preset === "topDown") {
-        cameraRef.current.position.set(0.01, 5.0, 0.01);
-        controlsRef.current.target.set(0, 0, 0);
+        targetCamPosRef.current.set(0.01, 5.2, 0.01);
+        targetLookAtRef.current.set(0, 0, 0);
       }
-      controlsRef.current.update();
     },
     triggerSnapTrap: () => {
       targetTrapAngleRef.current = 0.06;
@@ -220,8 +256,8 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           }
           mat.emissive.setHex(0x052e16);
           mat.emissiveIntensity = 0.25;
-          mat.transmission = 0.35;
-          mat.roughness = 0.32;
+          mat.transmission = 0.38;
+          mat.roughness = 0.28;
           mat.transparent = false;
         }
         mat.needsUpdate = true;
@@ -255,13 +291,12 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     }
   }, [isExploded]);
 
-  // Hotspot Focus
+  // Hotspot Focus smoothly lerped
   useEffect(() => {
-    if (selectedHotspot && controlsRef.current && cameraRef.current) {
+    if (selectedHotspot) {
       const [tx, ty, tz] = selectedHotspot.position;
-      controlsRef.current.target.set(tx, ty, tz);
-      cameraRef.current.position.set(tx + 1.1, ty + 0.7, tz + 1.8);
-      controlsRef.current.update();
+      targetLookAtRef.current.set(tx, ty, tz);
+      targetCamPosRef.current.set(tx + 1.1, ty + 0.7, tz + 1.8);
       sound.playInspectChime();
     }
   }, [selectedHotspot]);
@@ -283,17 +318,18 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
       0.1,
       100
     );
-    camera.position.set(2.8, 1.8, 4.2);
+    camera.position.copy(targetCamPosRef.current);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
-      preserveDrawingBuffer: true, // Needed for screenshot capture
+      preserveDrawingBuffer: true,
     });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
     renderer.localClippingEnabled = true;
     rendererRef.current = renderer;
     container.appendChild(renderer.domElement);
@@ -314,7 +350,7 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     const ambientLight = new THREE.AmbientLight(0x064e3b, 1.6);
     scene.add(ambientLight);
 
-    const keySun = new THREE.DirectionalLight(0xf0fdf4, 2.8);
+    const keySun = new THREE.DirectionalLight(0xf0fdf4, 2.9);
     keySun.position.set(5, 7, 5);
     keySunRef.current = keySun;
     scene.add(keySun);
@@ -323,7 +359,7 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     rimCyan.position.set(-4, 2, -3);
     scene.add(rimCyan);
 
-    const fillGreen = new THREE.PointLight(0x10b981, 2.2, 7);
+    const fillGreen = new THREE.PointLight(0x10b981, 2.4, 7);
     fillGreen.position.set(3, -2, 2);
     scene.add(fillGreen);
 
@@ -336,15 +372,22 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     leafGroupRef.current = leafGroup;
     modelGroup.add(leafGroup);
 
-    // Common materials with clipping plane
+    // Get procedural bump textures
+    const leafMicro = getLeafMicroTexture();
+    const barkMicro = getBarkMicroTexture();
+
+    // High-Fidelity SSS Organic Materials
     const plantMaterial = new THREE.MeshPhysicalMaterial({
       color: new THREE.Color(specimen.geometryConfig.baseColor),
-      roughness: 0.32,
-      metalness: 0.08,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.2,
-      transmission: 0.35,
-      thickness: 0.6,
+      roughness: 0.28,
+      metalness: 0.05,
+      clearcoat: 0.75,
+      clearcoatRoughness: 0.18,
+      transmission: 0.38,
+      thickness: 0.7,
+      ior: 1.42,
+      bumpMap: leafMicro.bump,
+      bumpScale: 0.012,
       side: THREE.DoubleSide,
       clippingPlanes: [clipPlane],
       clipShadows: true,
@@ -355,6 +398,8 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
       roughness: 0.45,
       metalness: 0.1,
       clearcoat: 0.4,
+      bumpMap: barkMicro,
+      bumpScale: 0.02,
       clippingPlanes: [clipPlane],
       clipShadows: true,
     });
@@ -372,7 +417,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     const stemRadius = modelType === "sequoia" ? 0.32 : 0.085;
     const stemGeom = new THREE.TubeGeometry(stemCurve, 48, stemRadius, 24, false);
 
-    // For Sequoia: fluted fibrous bark ridges
     if (modelType === "sequoia") {
       const pos = stemGeom.attributes.position;
       for (let i = 0; i < pos.count; i++) {
@@ -390,23 +434,20 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     stemMesh.name = "botanical_stem";
     modelGroup.add(stemMesh);
 
-    // 5. Specimen-Specific High-Fidelity Botanical Geometries
+    // 5. Specimen-Specific High-Fidelity Botanical Geometries with Double Curvature
     trapLobeRefs.current = [];
 
     if (modelType === "monstera") {
-      // Monstera: Cordate broad leaves with realistic perforations (fenestrations) & aerial roots
       for (let i = 0; i < leafCount; i++) {
         const leafAssembly = new THREE.Group();
 
-        // Authentic Monstera Leaf Shape with Holes (Fenestrations)
         const leafShape = new THREE.Shape();
-        leafShape.moveTo(0, 0); // Base at petiole
+        leafShape.moveTo(0, 0);
         leafShape.bezierCurveTo(0.35, 0.25, 0.75, 0.65, 0.68, 1.25);
-        leafShape.bezierCurveTo(0.6, 1.65, 0.25, 2.05, 0, 2.3); // Apex tip
+        leafShape.bezierCurveTo(0.6, 1.65, 0.25, 2.05, 0, 2.3);
         leafShape.bezierCurveTo(-0.25, 2.05, -0.6, 1.65, -0.68, 1.25);
         leafShape.bezierCurveTo(-0.75, 0.65, -0.35, 0.25, 0, 0);
 
-        // Fenestration Holes (oval cutouts along both sides of midrib)
         const holeConfigs = [
           { x: 0.22, y: 0.65, rx: 0.07, ry: 0.18, rot: 0.25 },
           { x: 0.3, y: 1.15, rx: 0.09, ry: 0.24, rot: 0.2 },
@@ -425,11 +466,14 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         const extrudeGeom = new THREE.ExtrudeGeometry(leafShape, {
           depth: 0.015,
           bevelEnabled: true,
-          bevelSegments: 2,
-          steps: 1,
+          bevelSegments: 3,
+          steps: 2,
           bevelSize: 0.008,
           bevelThickness: 0.008,
         });
+
+        // Apply smooth biological double curvature
+        applyOrganicCurvature(extrudeGeom, 0.22, 0.1, 0.02);
 
         const leafMesh = new THREE.Mesh(extrudeGeom, plantMaterial);
         leafMesh.name = `botanical_leaf_monstera_${i}`;
@@ -445,6 +489,26 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         midribMesh.position.set(0, 1.1, 0.02);
         leafMesh.add(midribMesh);
 
+        // Secondary lateral veins
+        for (let v = 0; v < 6; v++) {
+          const vFrac = (v + 1) / 7;
+          const vCurveR = new THREE.QuadraticBezierCurve3(
+            new THREE.Vector3(0, vFrac * 2.2, 0.02),
+            new THREE.Vector3(0.2, vFrac * 2.2 + 0.1, 0.018),
+            new THREE.Vector3(0.5, vFrac * 2.2 + 0.05, 0.015)
+          );
+          const vCurveL = new THREE.QuadraticBezierCurve3(
+            new THREE.Vector3(0, vFrac * 2.2, 0.02),
+            new THREE.Vector3(-0.2, vFrac * 2.2 + 0.1, 0.018),
+            new THREE.Vector3(-0.5, vFrac * 2.2 + 0.05, 0.015)
+          );
+          const vLineMat = new THREE.LineBasicMaterial({ color: 0xa7f3d0, transparent: true, opacity: 0.65 });
+          const vMeshR = new THREE.Line(new THREE.BufferGeometry().setFromPoints(vCurveR.getPoints(12)), vLineMat);
+          const vMeshL = new THREE.Line(new THREE.BufferGeometry().setFromPoints(vCurveL.getPoints(12)), vLineMat);
+          leafMesh.add(vMeshR);
+          leafMesh.add(vMeshL);
+        }
+
         // Petiole with geniculum joint
         const petioleGeom = new THREE.CylinderGeometry(0.025, 0.035, 0.8, 12);
         const petioleMesh = new THREE.Mesh(petioleGeom, stemMaterial);
@@ -452,7 +516,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         petioleMesh.rotation.x = 0.35;
         leafAssembly.add(petioleMesh);
 
-        // Arrange leaf assembly in spiral phyllotaxis
         const progress = i / leafCount;
         leafAssembly.position.y = -0.7 + progress * 2.1;
         leafAssembly.rotation.y = progress * Math.PI * 4;
@@ -464,7 +527,7 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         leafGroup.add(leafAssembly);
       }
 
-      // Add Climbing Aerial Adventitious Roots
+      // Climbing Aerial Roots
       for (let r = 0; r < 3; r++) {
         const rootCurve = new THREE.CatmullRomCurve3([
           new THREE.Vector3(0.05, 0.5 - r * 0.4, 0.05),
@@ -478,7 +541,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         modelGroup.add(rootMesh);
       }
     } else if (modelType === "cannabis") {
-      // Cannabis: Palmate 7-to-9 serrated leaflets with visible glandular trichomes
       for (let i = 0; i < leafCount; i++) {
         const palmateCluster = new THREE.Group();
         const leafletCount = 7;
@@ -488,22 +550,19 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           const length = 1.35 - Math.abs(l - 3) * 0.18;
           const width = 0.16;
 
-          // Serrated Leaflet Shape
           const lShape = new THREE.Shape();
           lShape.moveTo(0, 0);
 
-          // Right jagged serrated edge
           const teeth = 8;
           for (let t = 0; t < teeth; t++) {
             const frac = (t + 1) / (teeth + 1);
             const yTooth = frac * length;
             const xOut = width * Math.sin(frac * Math.PI) * 1.2;
             lShape.lineTo(xOut * 0.85, yTooth - 0.04);
-            lShape.lineTo(xOut, yTooth); // Tooth sharp tip
+            lShape.lineTo(xOut, yTooth);
           }
-          lShape.lineTo(0, length); // Leaflet acuminate apex
+          lShape.lineTo(0, length);
 
-          // Left jagged serrated edge
           for (let t = teeth - 1; t >= 0; t--) {
             const frac = (t + 1) / (teeth + 1);
             const yTooth = frac * length;
@@ -522,11 +581,14 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
             bevelThickness: 0.005,
           });
 
+          // Organic curvature on cannabis leaflets
+          applyOrganicCurvature(lGeom, 0.14, 0.04, 0.01);
+
           const lMesh = new THREE.Mesh(lGeom, plantMaterial);
           lMesh.name = `botanical_cannabis_leaflet_${i}_${l}`;
           leafletGroup.add(lMesh);
 
-          // Glandular Capitate-Stalked Trichomes (resinous heads)
+          // Glandular Capitate-Stalked Trichomes
           const trichomeCount = 4;
           for (let tc = 0; tc < trichomeCount; tc++) {
             const tGroup = new THREE.Group();
@@ -551,7 +613,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
             leafletGroup.add(tGroup);
           }
 
-          // Radiate leaflets into palmate hand
           const spreadAngle = (l - 3) * 0.25;
           leafletGroup.rotation.z = spreadAngle;
           palmateCluster.add(leafletGroup);
@@ -567,7 +628,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         leafGroup.add(palmateCluster);
       }
     } else if (modelType === "sequoia") {
-      // Sequoia: Massive fluted trunk with horizontal tiers of distichous needle sprays and mini seed cones
       const branchTiers = 6;
       for (let t = 0; t < branchTiers; t++) {
         const tierGroup = new THREE.Group();
@@ -575,7 +635,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
 
         for (let b = 0; b < branchesInTier; b++) {
           const branchGroup = new THREE.Group();
-          // Horizontal branch axis
           const bCurve = new THREE.CatmullRomCurve3([
             new THREE.Vector3(0, 0, 0),
             new THREE.Vector3(0.5, -0.05, 0),
@@ -585,7 +644,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           const bMesh = new THREE.Mesh(bGeom, stemMaterial);
           branchGroup.add(bMesh);
 
-          // Distichous Flat Needles along branch
           const needleCount = 14;
           for (let n = 0; n < needleCount; n++) {
             const needleGeom = new THREE.BoxGeometry(0.18, 0.01, 0.04);
@@ -595,7 +653,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
             branchGroup.add(needleMesh);
           }
 
-          // Small Woody Ovulate Female Cone at tip
           const coneGeom = new THREE.ConeGeometry(0.08, 0.18, 10);
           coneGeom.rotateX(Math.PI);
           const coneMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.9 });
@@ -614,8 +671,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         leafGroup.add(tierGroup);
       }
     } else if (modelType === "arabidopsis") {
-      // Arabidopsis: Basal rosette of spatulate leaves + central bolting stem with 4-petal white flowers & siliques
-      // 1. Basal Rosette leaves (Fibonacci spiral)
       const rosetteCount = 12;
       for (let r = 0; r < rosetteCount; r++) {
         const spatulateShape = new THREE.Shape();
@@ -625,14 +680,23 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         spatulateShape.bezierCurveTo(0, 1.1, -0.25, 1.0, -0.3, 0.85);
         spatulateShape.bezierCurveTo(-0.35, 0.5, -0.12, 0.2, 0, 0);
 
-        const spatGeom = new THREE.ShapeGeometry(spatulateShape);
+        const spatGeom = new THREE.ExtrudeGeometry(spatulateShape, {
+          depth: 0.01,
+          bevelEnabled: true,
+          bevelSegments: 2,
+          steps: 1,
+          bevelSize: 0.004,
+          bevelThickness: 0.004,
+        });
+        applyOrganicCurvature(spatGeom, 0.16, 0.06, 0.02);
+
         const spatMesh = new THREE.Mesh(spatGeom, plantMaterial);
         spatMesh.name = `botanical_arabidopsis_rosette_${r}`;
         spatMesh.rotation.x = -Math.PI / 2.15;
 
         const leafHolder = new THREE.Group();
         leafHolder.add(spatMesh);
-        leafHolder.rotation.y = r * 2.399; // Golden ratio angle 137.5 deg
+        leafHolder.rotation.y = r * 2.399;
         leafHolder.position.y = -1.6;
         leafHolder.scale.set(0.65 + (r / rosetteCount) * 0.35, 0.65 + (r / rosetteCount) * 0.35, 1);
         leafHolder.userData.origY = leafHolder.position.y;
@@ -640,10 +704,8 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         leafGroup.add(leafHolder);
       }
 
-      // 2. Bolting Flowers (4-petal white cruciform) & Silique Pods along erect stem
       for (let f = 0; f < 5; f++) {
         const flowerGroup = new THREE.Group();
-        // 4 white petals
         for (let p = 0; p < 4; p++) {
           const petalGeom = new THREE.CircleGeometry(0.045, 12);
           const petalMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -651,7 +713,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           petalMesh.position.set(Math.cos((p * Math.PI) / 2) * 0.05, Math.sin((p * Math.PI) / 2) * 0.05, 0);
           flowerGroup.add(petalMesh);
         }
-        // Yellow center
         const center = new THREE.Mesh(new THREE.CircleGeometry(0.02, 10), new THREE.MeshBasicMaterial({ color: 0xfacc15 }));
         flowerGroup.add(center);
 
@@ -660,7 +721,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         flowerGroup.rotation.x = 0.5;
         modelGroup.add(flowerGroup);
 
-        // Silique seed pod
         const siliqueGeom = new THREE.CylinderGeometry(0.008, 0.008, 0.35, 8);
         const siliqueMesh = new THREE.Mesh(siliqueGeom, plantMaterial);
         siliqueMesh.position.set(0.12, 0.6 + f * 0.15, 0);
@@ -668,33 +728,29 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         modelGroup.add(siliqueMesh);
       }
     } else if (modelType === "dionaea") {
-      // Dionaea: Winged flattened petiole + Bivalve snap-trap lobes with trigger hairs and interlocking teeth
       for (let i = 0; i < leafCount; i++) {
         const trapAssembly = new THREE.Group();
 
-        // Winged flattened petiole
         const wingShape = new THREE.Shape();
         wingShape.moveTo(0, 0);
         wingShape.bezierCurveTo(0.18, 0.3, 0.24, 0.7, 0.06, 1.1);
         wingShape.bezierCurveTo(-0.06, 1.1, -0.24, 0.7, -0.18, 0.3);
         wingShape.lineTo(0, 0);
 
-        const wingGeom = new THREE.ShapeGeometry(wingShape);
+        const wingGeom = new THREE.ExtrudeGeometry(wingShape, { depth: 0.01, bevelEnabled: true, bevelSegments: 2, steps: 1 });
+        applyOrganicCurvature(wingGeom, 0.12, 0.05, 0.01);
         const wingMesh = new THREE.Mesh(wingGeom, plantMaterial);
         wingMesh.rotation.x = -Math.PI / 2.3;
         trapAssembly.add(wingMesh);
 
-        // Bivalve Trap Head at apex of petiole
         const trapHead = new THREE.Group();
         trapHead.position.set(0, 0.45, 1.0);
 
-        // Left Lobe
         const leftLobe = new THREE.Group();
         const lobeGeom = new THREE.CylinderGeometry(0.02, 0.32, 0.6, 24, 8, false, 0, Math.PI);
         lobeGeom.scale(0.8, 1, 0.18);
         lobeGeom.rotateZ(Math.PI / 2);
 
-        // Crimson interior digestive lining
         const innerMat = new THREE.MeshPhysicalMaterial({
           color: 0xdc2626,
           roughness: 0.3,
@@ -706,7 +762,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         leftMesh.name = `botanical_dionaea_lobe_left_${i}`;
         leftLobe.add(leftMesh);
 
-        // Marginal Cilia / Teeth (Interlocking comb)
         for (let c = 0; c < 10; c++) {
           const toothGeom = new THREE.ConeGeometry(0.015, 0.18, 8);
           toothGeom.rotateZ(Math.PI / 2);
@@ -715,7 +770,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           leftLobe.add(toothMesh);
         }
 
-        // 3 Mechanosensory Trigger Hairs
         for (let th = 0; th < 3; th++) {
           const hairGeom = new THREE.CylinderGeometry(0.004, 0.007, 0.09, 6);
           const hairMesh = new THREE.Mesh(
@@ -726,7 +780,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           leftLobe.add(hairMesh);
         }
 
-        // Right Lobe (Mirror)
         const rightLobe = new THREE.Group();
         const rightMesh = new THREE.Mesh(lobeGeom.clone(), innerMat);
         rightMesh.name = `botanical_dionaea_lobe_right_${i}`;
@@ -750,7 +803,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           rightLobe.add(hairMesh);
         }
 
-        // Initial open angle
         leftLobe.rotation.x = 0.85;
         rightLobe.rotation.x = -0.85;
 
@@ -760,7 +812,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
 
         trapLobeRefs.current.push({ left: leftLobe, right: rightLobe });
 
-        // Arrange in prostrate rosette
         const progress = i / leafCount;
         trapAssembly.position.y = -1.2 + (i % 2) * 0.15;
         trapAssembly.rotation.y = progress * Math.PI * 2;
@@ -769,19 +820,16 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         leafGroup.add(trapAssembly);
       }
     } else if (modelType === "ginkgo") {
-      // Ginkgo: Fan-shaped flabellate leaves with apical notch and radiating dichotomous vein lines
       for (let i = 0; i < leafCount; i++) {
         const ginkgoAssembly = new THREE.Group();
 
-        // Fan shape with apical sinus notch
         const fanShape = new THREE.Shape();
-        fanShape.moveTo(0, 0); // Petiole origin
-        fanShape.bezierCurveTo(0.2, 0.2, 0.55, 0.6, 0.65, 1.0); // Right margin
-        // Bilobate apical sinus
-        fanShape.bezierCurveTo(0.45, 1.15, 0.15, 1.18, 0.05, 0.95); // Right lobe
-        fanShape.lineTo(0, 0.85); // Central Notch / Sinus
+        fanShape.moveTo(0, 0);
+        fanShape.bezierCurveTo(0.2, 0.2, 0.55, 0.6, 0.65, 1.0);
+        fanShape.bezierCurveTo(0.45, 1.15, 0.15, 1.18, 0.05, 0.95);
+        fanShape.lineTo(0, 0.85);
         fanShape.lineTo(-0.05, 0.95);
-        fanShape.bezierCurveTo(-0.15, 1.18, -0.45, 1.15, -0.65, 1.0); // Left lobe
+        fanShape.bezierCurveTo(-0.15, 1.18, -0.45, 1.15, -0.65, 1.0);
         fanShape.bezierCurveTo(-0.55, 0.6, -0.2, 0.2, 0, 0);
 
         const fanGeom = new THREE.ExtrudeGeometry(fanShape, {
@@ -792,12 +840,12 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           bevelSize: 0.005,
           bevelThickness: 0.005,
         });
+        applyOrganicCurvature(fanGeom, 0.18, 0.08, 0.015);
 
         const fanMesh = new THREE.Mesh(fanGeom, plantMaterial);
         fanMesh.name = `botanical_ginkgo_leaf_${i}`;
         ginkgoAssembly.add(fanMesh);
 
-        // Fine Dichotomous Venation lines
         const veinCount = 9;
         const veinLineMat = new THREE.LineBasicMaterial({
           color: 0xa7f3d0,
@@ -817,7 +865,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           ginkgoAssembly.add(veinLine);
         }
 
-        // Slender petiole
         const gPetioleGeom = new THREE.CylinderGeometry(0.012, 0.015, 0.75, 8);
         const gPetioleMesh = new THREE.Mesh(gPetioleGeom, stemMaterial);
         gPetioleMesh.position.set(0, -0.36, 0);
@@ -840,7 +887,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     scene.add(capGroup);
 
     // Concentric histological rings:
-    // Pith (Central amber)
     const pithMesh = new THREE.Mesh(
       new THREE.CircleGeometry(0.16, 32),
       new THREE.MeshBasicMaterial({ color: 0xfef08a, side: THREE.DoubleSide })
@@ -848,7 +894,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     pithMesh.name = "botanical_pith_ring";
     capGroup.add(pithMesh);
 
-    // Xylem Ring (Cyan tracheids & vessels)
     const xylemMesh = new THREE.Mesh(
       new THREE.RingGeometry(0.16, 0.36, 32),
       new THREE.MeshBasicMaterial({ color: 0x06b6d4, side: THREE.DoubleSide })
@@ -856,7 +901,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     xylemMesh.name = "botanical_xylem_ring";
     capGroup.add(xylemMesh);
 
-    // Vascular Cambium Ring (Golden meristem dividing line)
     const cambiumMesh = new THREE.Mesh(
       new THREE.RingGeometry(0.36, 0.40, 32),
       new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide })
@@ -864,7 +908,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     cambiumMesh.name = "botanical_cambium_ring";
     capGroup.add(cambiumMesh);
 
-    // Phloem Ring (Emerald sucrose sieve tubes)
     const phloemMesh = new THREE.Mesh(
       new THREE.RingGeometry(0.40, 0.58, 32),
       new THREE.MeshBasicMaterial({ color: 0x10b981, side: THREE.DoubleSide })
@@ -872,7 +915,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     phloemMesh.name = "botanical_phloem_ring";
     capGroup.add(phloemMesh);
 
-    // Cortex / Cuticular ring
     const cortexMesh = new THREE.Mesh(
       new THREE.RingGeometry(0.58, 0.74, 32),
       new THREE.MeshBasicMaterial({ color: 0x064e3b, side: THREE.DoubleSide })
@@ -886,8 +928,8 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     const flowColors = new Float32Array(flowCount * 3);
     const flowDirections = new Float32Array(flowCount);
 
-    const xylemColor = new THREE.Color(0x06b6d4); // Cyan water
-    const phloemColor = new THREE.Color(0xf59e0b); // Amber sugar
+    const xylemColor = new THREE.Color(0x06b6d4);
+    const phloemColor = new THREE.Color(0xf59e0b);
 
     for (let i = 0; i < flowCount; i++) {
       const isXylem = i % 2 === 0;
@@ -944,9 +986,43 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
       hotspotMeshesRef.current.push({ mesh: pinMesh, pin });
     });
 
-    // 9. Pointer Interaction for Hotspots & Trigger Hairs
+    // 9. Pointer Interaction for Hotspots, Trigger Hairs & Live Hover Probe
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
+
+    const onPointerMove = (event: MouseEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+
+      // Check hover on plant meshes
+      const intersects = raycaster.intersectObjects(modelGroup.children, true);
+      if (intersects.length > 0) {
+        const hitName = intersects[0].object.name;
+        if (hitName.includes("leaf") || hitName.includes("leaflet") || hitName.includes("needle")) {
+          setHoveredTissue("Adaxial Palisade Chlorenchyma & Epicuticular Wax");
+        } else if (hitName.includes("stem") || hitName.includes("branch")) {
+          setHoveredTissue("Cortex Parenchyma & Lignified Sclerenchyma Fibers");
+        } else if (hitName.includes("xylem")) {
+          setHoveredTissue("Xylem Vessel Conduits (Lignified Tracheary Elements)");
+        } else if (hitName.includes("phloem")) {
+          setHoveredTissue("Phloem Sieve Tube Elements & Companion Cells");
+        } else if (hitName.includes("cambium")) {
+          setHoveredTissue("Vascular Cambium (Lateral Meristematic Ring)");
+        } else if (hitName.includes("pith")) {
+          setHoveredTissue("Medullary Pith Parenchyma (Intercellular Gas Chambers)");
+        } else if (hitName.includes("dionaea_lobe")) {
+          setHoveredTissue("Pre-Stressed Mechanosensory Trap Lobe & Digestive Gland Field");
+        } else {
+          setHoveredTissue(null);
+        }
+      } else {
+        setHoveredTissue(null);
+      }
+    };
+    renderer.domElement.addEventListener("mousemove", onPointerMove);
 
     const onPointerDown = (event: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -955,7 +1031,6 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
 
       raycaster.setFromCamera(mouse, camera);
 
-      // Check Hotspots
       const meshesToTest = hotspotMeshesRef.current.map((item) => item.mesh);
       const pinIntersects = raycaster.intersectObjects(meshesToTest, true);
 
@@ -971,13 +1046,11 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
         }
       }
 
-      // Check Dionaea Trigger Hair click
       if (modelType === "dionaea") {
         const allIntersects = raycaster.intersectObjects(modelGroup.children, true);
         if (allIntersects.length > 0) {
           const hitObj = allIntersects[0].object;
           if (hitObj.name.includes("dionaea_lobe") || hitObj.parent?.name.includes("dionaea")) {
-            // Trigger snap!
             targetTrapAngleRef.current = 0.06;
             sound.playActionPotential();
             setTimeout(() => {
@@ -989,7 +1062,7 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     };
     renderer.domElement.addEventListener("click", onPointerDown);
 
-    // 10. Animation Loop
+    // 10. Animation Loop with Smooth Camera Lerping & Living Respiration
     let clock = new THREE.Clock();
     let animId: number;
 
@@ -997,17 +1070,22 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
       animId = requestAnimationFrame(animate);
       const elapsed = clock.getElapsedTime();
 
+      // Smooth camera interpolation
+      camera.position.lerp(targetCamPosRef.current, 0.05);
+      controls.target.lerp(targetLookAtRef.current, 0.05);
       controls.update();
 
-      // Ambient idle rotation when not dragging
       if (!controls.autoRotate) {
-        modelGroup.rotation.y += 0.0018;
+        modelGroup.rotation.y += 0.0016;
       }
 
-      // Turgor pressure wilt/erect morphing:
-      // Turgor between 0.0 and 1.5 MPa: map to leaf droop
+      // Gentle living respiration oscillation (0.15 Hz biological pulse)
+      const respiration = Math.sin(elapsed * 0.9) * 0.003;
+      modelGroup.scale.set(1.0 + respiration, 1.0 + respiration, 1.0 + respiration);
+
+      // Turgor pressure wilt/erect morphing
       const turgorFactor = Math.max(0.0, Math.min(1.5, turgorPressureMPa));
-      const wiltAngle = (1.0 - turgorFactor / 1.0) * 0.45; // positive drops leaves down
+      const wiltAngle = (1.0 - turgorFactor / 1.0) * 0.42;
       if (leafGroupRef.current) {
         leafGroupRef.current.children.forEach((leaf) => {
           leaf.rotation.x = (leaf.userData.baseRotX ?? 0) + wiltAngle;
@@ -1018,7 +1096,7 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
       if (modelType === "dionaea" && trapLobeRefs.current.length > 0) {
         const currentAngle = trapLobeRefs.current[0].left.rotation.x;
         const diff = targetTrapAngleRef.current - currentAngle;
-        const speed = targetTrapAngleRef.current < currentAngle ? 0.25 : 0.04; // snap is fast, re-arm is slow
+        const speed = targetTrapAngleRef.current < currentAngle ? 0.28 : 0.04;
         trapLobeRefs.current.forEach(({ left, right }) => {
           left.rotation.x += diff * speed;
           right.rotation.x -= diff * speed;
@@ -1062,6 +1140,7 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener("resize", handleResize);
+      renderer.domElement.removeEventListener("mousemove", onPointerMove);
       renderer.domElement.removeEventListener("click", onPointerDown);
       if (container && renderer.domElement) {
         container.removeChild(renderer.domElement);
@@ -1088,6 +1167,14 @@ const PlantDissection3D = forwardRef<DissectionControlsHandle, Props>(function P
           <span className="text-emerald-300 font-bold">5.0 mm</span>
         </div>
       </div>
+
+      {/* Live Raycasting Anatomical Hover Probe */}
+      {hoveredTissue && (
+        <div className="absolute top-4 right-4 pointer-events-none glass-panel-glow px-3 py-1.5 rounded-xl border border-emerald-400/50 text-xs font-mono text-emerald-300 flex items-center gap-2 animate-in fade-in">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          <span>{hoveredTissue}</span>
+        </div>
+      )}
 
       {/* Cross Section Ring Legend (when cut is active) */}
       {dissectionDepth > 0 && (

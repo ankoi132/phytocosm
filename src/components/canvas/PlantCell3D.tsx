@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Organelle, CELL_ORGANELLES } from "@/data/cellOrganelles";
 import { sound } from "@/utils/audio";
+import { getCellularParenchymaTexture } from "@/utils/proceduralTextures";
 
 interface Props {
   selectedOrganelle: Organelle | null;
@@ -21,15 +22,19 @@ export default function PlantCell3D({
   const controlsRef = useRef<OrbitControls | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const cellWallRef = useRef<THREE.Mesh | null>(null);
+  const vacuoleMeshRef = useRef<THREE.Mesh | null>(null);
   const organelleMeshesRef = useRef<{ mesh: THREE.Object3D; organelle: Organelle }[]>([]);
+
+  // Target camera and target coordinates for smooth cinematic lerp
+  const targetCamPosRef = useRef<THREE.Vector3>(new THREE.Vector3(3.2, 2.4, 4.8));
+  const targetLookAtRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
 
   // Smooth camera interpolation on organelle select
   useEffect(() => {
-    if (selectedOrganelle && cameraRef.current && controlsRef.current) {
+    if (selectedOrganelle) {
       const [tx, ty, tz] = selectedOrganelle.position3D;
-      controlsRef.current.target.set(tx, ty, tz);
-      cameraRef.current.position.set(tx + 1.2, ty + 0.9, tz + 2.0);
-      controlsRef.current.update();
+      targetLookAtRef.current.set(tx, ty, tz);
+      targetCamPosRef.current.set(tx + 1.25, ty + 0.85, tz + 1.9);
       sound.playInspectChime();
     }
   }, [selectedOrganelle]);
@@ -39,8 +44,8 @@ export default function PlantCell3D({
     if (cellWallRef.current) {
       const mat = cellWallRef.current.material as THREE.MeshPhysicalMaterial;
       if (mat) {
-        mat.opacity = isCellWallCutaway ? 0.2 : 0.45;
-        mat.transmission = isCellWallCutaway ? 0.9 : 0.65;
+        mat.opacity = isCellWallCutaway ? 0.22 : 0.55;
+        mat.transmission = isCellWallCutaway ? 0.92 : 0.6;
         mat.needsUpdate = true;
       }
     }
@@ -50,7 +55,7 @@ export default function PlantCell3D({
     const container = mountRef.current;
     if (!container) return;
 
-    // 1. Scene, Camera, Renderer
+    // 1. Scene, Camera, WebGLRenderer
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x030704);
     scene.fog = new THREE.FogExp2(0x030704, 0.04);
@@ -61,35 +66,36 @@ export default function PlantCell3D({
       0.1,
       100
     );
-    camera.position.set(3.2, 2.4, 4.8);
+    camera.position.copy(targetCamPosRef.current);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
     container.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.maxDistance = 14;
-    controls.minDistance = 1.0;
+    controls.minDistance = 0.8;
     controlsRef.current = controls;
 
-    // 2. Lights
-    const ambientLight = new THREE.AmbientLight(0x064e3b, 1.4);
+    // 2. Cinematic Biological Lights
+    const ambientLight = new THREE.AmbientLight(0x064e3b, 1.5);
     scene.add(ambientLight);
 
-    const sun = new THREE.DirectionalLight(0xf0fdf4, 2.5);
+    const sun = new THREE.DirectionalLight(0xf0fdf4, 2.8);
     sun.position.set(5, 7, 5);
     scene.add(sun);
 
-    const cyanPoint = new THREE.PointLight(0x06b6d4, 3.0, 10);
+    const cyanPoint = new THREE.PointLight(0x06b6d4, 3.2, 11);
     cyanPoint.position.set(-4, 2, -3);
     scene.add(cyanPoint);
 
-    const violetPoint = new THREE.PointLight(0xa855f7, 2.5, 8);
+    const violetPoint = new THREE.PointLight(0xa855f7, 2.5, 9);
     violetPoint.position.set(3, -2, -2);
     scene.add(violetPoint);
 
@@ -98,164 +104,240 @@ export default function PlantCell3D({
 
     organelleMeshesRef.current = [];
 
-    // 3. Hexagonal/Prismatic Plant Cell Wall (Polyhedral outer geometry)
-    const cellWallGeom = new THREE.CylinderGeometry(2.4, 2.4, 3.2, 6, 1, false);
+    // 3. Hexagonal Prismatic Plant Cell Wall & Middle Lamella
+    const cellWallGeom = new THREE.CylinderGeometry(2.4, 2.4, 3.2, 6, 2, false);
+    const cellTexture = getCellularParenchymaTexture();
+
     const cellWallMat = new THREE.MeshPhysicalMaterial({
       color: 0x15803d,
-      roughness: 0.2,
+      roughness: 0.25,
       metalness: 0.05,
       transmission: 0.65,
       transparent: true,
       opacity: 0.45,
-      clearcoat: 0.8,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.2,
+      bumpMap: cellTexture,
+      bumpScale: 0.015,
       side: THREE.DoubleSide,
-      wireframe: false,
     });
     const cellWallMesh = new THREE.Mesh(cellWallGeom, cellWallMat);
     cellWallRef.current = cellWallMesh;
     cellGroup.add(cellWallMesh);
 
-    // Cell wall outline wireframe
+    // Subtle Middle Lamella outer frame line
     const wireframeGeom = new THREE.WireframeGeometry(cellWallGeom);
     const wireframeMat = new THREE.LineBasicMaterial({
-      color: 0x22c55e,
+      color: 0x4ade80,
       transparent: true,
       opacity: 0.35,
     });
     const wireframeLine = new THREE.LineSegments(wireframeGeom, wireframeMat);
     cellGroup.add(wireframeLine);
 
-    // Map organelle to cell wall
     const cellWallData = CELL_ORGANELLES.find((o) => o.id === "cell-wall");
     if (cellWallData) {
       organelleMeshesRef.current.push({ mesh: cellWallMesh, organelle: cellWallData });
     }
 
-    // 4. Central Vacuole (Massive translucent fluid sac)
+    // 4. Central Vacuole & Tonoplast (Internal turgor engine)
     const vacuoleData = CELL_ORGANELLES.find((o) => o.id === "central-vacuole");
     if (vacuoleData) {
-      const vacGeom = new THREE.SphereGeometry(1.4, 32, 32);
+      const vacGeom = new THREE.SphereGeometry(1.4, 36, 36);
       vacGeom.scale(1.2, 0.95, 1.1);
       const vacMat = new THREE.MeshPhysicalMaterial({
         color: 0x06b6d4,
-        roughness: 0.1,
+        roughness: 0.08,
         metalness: 0.05,
-        transmission: 0.8,
+        transmission: 0.82,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.7,
+        ior: 1.34, // Water refractive index
         emissive: 0x083344,
-        emissiveIntensity: 0.4,
+        emissiveIntensity: 0.45,
       });
       const vacMesh = new THREE.Mesh(vacGeom, vacMat);
       vacMesh.position.set(...vacuoleData.position3D);
+      vacuoleMeshRef.current = vacMesh;
       cellGroup.add(vacMesh);
       organelleMeshesRef.current.push({ mesh: vacMesh, organelle: vacuoleData });
     }
 
-    // 5. Chloroplasts with interior Thylakoid Grana Discs
+    // 5. High-Fidelity Chloroplast with 3D Thylakoid Grana Stacks & Stroma Lamellae
     const chloroData = CELL_ORGANELLES.find((o) => o.id === "chloroplast");
     if (chloroData) {
-      const chloroCluster = new THREE.Group();
-      chloroCluster.position.set(...chloroData.position3D);
+      const chloroMaster = new THREE.Group();
+      chloroMaster.position.set(...chloroData.position3D);
 
-      // Main primary chloroplast
-      const chloroGeom = new THREE.SphereGeometry(0.45, 24, 24);
-      chloroGeom.scale(1.4, 0.7, 0.7);
-      const chloroMat = new THREE.MeshPhysicalMaterial({
+      // Semi-transparent double-membrane envelope (lenticular biconvex shape)
+      const envelopeGeom = new THREE.SphereGeometry(0.55, 32, 32);
+      envelopeGeom.scale(1.45, 0.65, 0.85);
+
+      const envelopeMat = new THREE.MeshPhysicalMaterial({
         color: 0x16a34a,
-        roughness: 0.3,
-        metalness: 0.1,
-        clearcoat: 0.6,
+        roughness: 0.22,
+        metalness: 0.08,
+        transmission: 0.6,
+        transparent: true,
+        opacity: 0.75,
+        clearcoat: 0.7,
         emissive: 0x052e16,
         emissiveIntensity: 0.5,
       });
-      const chloroMesh = new THREE.Mesh(chloroGeom, chloroMat);
-      chloroCluster.add(chloroMesh);
+      const envelopeMesh = new THREE.Mesh(envelopeGeom, envelopeMat);
+      chloroMaster.add(envelopeMesh);
 
-      // Add a couple of satellite chloroplasts orbiting perimeter
-      const satOffsets = [
-        [0.8, -0.6, -0.7],
-        [-1.2, 0.8, -1.0],
-        [0.4, 1.2, 0.8],
+      // Internal Thylakoid Grana Stacks (stacked discs in deep chlorophyll green)
+      const granaMat = new THREE.MeshStandardMaterial({
+        color: 0x15803d,
+        roughness: 0.35,
+        emissive: 0x052e16,
+        emissiveIntensity: 0.4,
+      });
+
+      const granumConfigs = [
+        { x: -0.32, z: -0.12, discs: 5 },
+        { x: -0.1, z: 0.18, discs: 6 },
+        { x: 0.18, z: -0.15, discs: 5 },
+        { x: 0.35, z: 0.12, discs: 4 },
       ];
-      satOffsets.forEach((pos) => {
-        const satMesh = new THREE.Mesh(chloroGeom.clone(), chloroMat);
+
+      granumConfigs.forEach((gc) => {
+        const stackGroup = new THREE.Group();
+        stackGroup.position.set(gc.x, 0, gc.z);
+
+        for (let d = 0; d < gc.discs; d++) {
+          const discGeom = new THREE.CylinderGeometry(0.075, 0.075, 0.016, 16);
+          const discMesh = new THREE.Mesh(discGeom, granaMat);
+          discMesh.position.y = -0.08 + d * 0.032;
+          stackGroup.add(discMesh);
+        }
+        chloroMaster.add(stackGroup);
+      });
+
+      // Stroma Lamellae ribbons connecting grana
+      const lamellaGeom = new THREE.BoxGeometry(0.65, 0.008, 0.04);
+      const lamellaMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.6 });
+      const lamellaMesh = new THREE.Mesh(lamellaGeom, lamellaMat);
+      lamellaMesh.rotation.y = 0.4;
+      chloroMaster.add(lamellaMesh);
+
+      // Satellite Chloroplasts around cell periphery
+      const satPositions = [
+        [0.85, -0.65, -0.75],
+        [-1.25, 0.85, -1.05],
+        [0.45, 1.25, 0.85],
+      ];
+      satPositions.forEach((pos) => {
+        const satMesh = envelopeMesh.clone();
         satMesh.position.set(pos[0], pos[1], pos[2]);
         satMesh.rotation.set(Math.random(), Math.random(), Math.random());
         cellGroup.add(satMesh);
       });
 
-      cellGroup.add(chloroCluster);
-      organelleMeshesRef.current.push({ mesh: chloroCluster, organelle: chloroData });
+      cellGroup.add(chloroMaster);
+      organelleMeshesRef.current.push({ mesh: chloroMaster, organelle: chloroData });
     }
 
-    // 6. Nucleus & Nucleolus
+    // 6. Nucleus with Nuclear Pores & Chromatin
     const nucleusData = CELL_ORGANELLES.find((o) => o.id === "nucleus");
     if (nucleusData) {
       const nucleusGroup = new THREE.Group();
       nucleusGroup.position.set(...nucleusData.position3D);
 
-      const nucGeom = new THREE.SphereGeometry(0.65, 32, 32);
+      const nucGeom = new THREE.SphereGeometry(0.68, 32, 32);
       const nucMat = new THREE.MeshPhysicalMaterial({
         color: 0x7c3aed,
-        roughness: 0.35,
-        transmission: 0.4,
+        roughness: 0.32,
+        transmission: 0.45,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.88,
         emissive: 0x4c1d95,
-        emissiveIntensity: 0.4,
+        emissiveIntensity: 0.45,
       });
       const nucMesh = new THREE.Mesh(nucGeom, nucMat);
       nucleusGroup.add(nucMesh);
 
       // Inner dense nucleolus
       const nucleolusMesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.24, 16, 16),
+        new THREE.SphereGeometry(0.24, 20, 20),
         new THREE.MeshBasicMaterial({ color: 0xc084fc })
       );
       nucleusGroup.add(nucleolusMesh);
+
+      // Nuclear Pores (subtle golden dimples on surface)
+      for (let p = 0; p < 16; p++) {
+        const poreMesh = new THREE.Mesh(
+          new THREE.RingGeometry(0.02, 0.035, 12),
+          new THREE.MeshBasicMaterial({ color: 0xe9d5ff, side: THREE.DoubleSide })
+        );
+        const phi = Math.acos(-1 + (2 * p) / 16);
+        const theta = Math.sqrt(16 * Math.PI) * phi;
+        poreMesh.position.set(
+          0.69 * Math.cos(theta) * Math.sin(phi),
+          0.69 * Math.sin(theta) * Math.sin(phi),
+          0.69 * Math.cos(phi)
+        );
+        poreMesh.lookAt(0, 0, 0);
+        nucleusGroup.add(poreMesh);
+      }
 
       cellGroup.add(nucleusGroup);
       organelleMeshesRef.current.push({ mesh: nucleusGroup, organelle: nucleusData });
     }
 
-    // 7. Mitochondria
+    // 7. Mitochondria with Folded Cristae Baffles
     const mitoData = CELL_ORGANELLES.find((o) => o.id === "mitochondria");
     if (mitoData) {
       const mitoGroup = new THREE.Group();
       mitoGroup.position.set(...mitoData.position3D);
 
-      const mitoGeom = new THREE.CapsuleGeometry(0.18, 0.45, 16, 16);
+      const mitoGeom = new THREE.CapsuleGeometry(0.2, 0.48, 16, 16);
       mitoGeom.rotateZ(Math.PI / 4);
+
       const mitoMat = new THREE.MeshPhysicalMaterial({
         color: 0xd97706,
-        roughness: 0.4,
+        roughness: 0.35,
+        transmission: 0.5,
+        transparent: true,
+        opacity: 0.85,
         emissive: 0x78350f,
-        emissiveIntensity: 0.45,
+        emissiveIntensity: 0.5,
       });
       const mitoMesh = new THREE.Mesh(mitoGeom, mitoMat);
       mitoGroup.add(mitoMesh);
+
+      // Internal Folded Cristae Plates
+      for (let cr = 0; cr < 5; cr++) {
+        const cristaGeom = new THREE.RingGeometry(0.04, 0.14, 16);
+        const cristaMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, side: THREE.DoubleSide });
+        const cristaMesh = new THREE.Mesh(cristaGeom, cristaMat);
+        cristaMesh.position.set(-0.1 + cr * 0.05, -0.1 + cr * 0.05, 0);
+        cristaMesh.rotation.set(Math.PI / 3, Math.PI / 4, 0);
+        mitoGroup.add(cristaMesh);
+      }
 
       cellGroup.add(mitoGroup);
       organelleMeshesRef.current.push({ mesh: mitoGroup, organelle: mitoData });
     }
 
-    // 8. Endoplasmic Reticulum & Golgi
+    // 8. Endoplasmic Reticulum (RER & SER folded sheets)
     const erData = CELL_ORGANELLES.find((o) => o.id === "endoplasmic-reticulum");
     if (erData) {
       const erGroup = new THREE.Group();
       erGroup.position.set(...erData.position3D);
 
-      for (let s = 0; s < 4; s++) {
-        const torusGeom = new THREE.TorusGeometry(0.4 + s * 0.12, 0.035, 12, 32, Math.PI * 1.3);
-        const torusMat = new THREE.MeshBasicMaterial({
+      for (let s = 0; s < 5; s++) {
+        const torusGeom = new THREE.TorusGeometry(0.38 + s * 0.1, 0.035, 12, 36, Math.PI * 1.4);
+        const torusMat = new THREE.MeshStandardMaterial({
           color: 0xec4899,
-          transparent: true,
-          opacity: 0.85,
+          roughness: 0.4,
+          emissive: 0x831843,
+          emissiveIntensity: 0.3,
         });
         const torusMesh = new THREE.Mesh(torusGeom, torusMat);
-        torusMesh.position.y = s * 0.08;
-        torusMesh.rotation.x = Math.PI / 3;
+        torusMesh.position.y = s * 0.07;
+        torusMesh.rotation.x = Math.PI / 3.2;
         erGroup.add(torusMesh);
       }
 
@@ -263,42 +345,54 @@ export default function PlantCell3D({
       organelleMeshesRef.current.push({ mesh: erGroup, organelle: erData });
     }
 
-    // 9. Golgi Apparatus
+    // 9. Golgi Apparatus (Dictyosomes with transport vesicles)
     const golgiData = CELL_ORGANELLES.find((o) => o.id === "golgi-apparatus");
     if (golgiData) {
       const golgiGroup = new THREE.Group();
       golgiGroup.position.set(...golgiData.position3D);
 
       for (let g = 0; g < 5; g++) {
-        const plateGeom = new THREE.CylinderGeometry(0.35 - g * 0.03, 0.38 - g * 0.03, 0.03, 24);
-        plateGeom.scale(1.2, 1, 0.6);
-        const plateMat = new THREE.MeshBasicMaterial({
+        const plateGeom = new THREE.CylinderGeometry(0.35 - g * 0.03, 0.38 - g * 0.03, 0.028, 24);
+        plateGeom.scale(1.25, 1, 0.65);
+        const plateMat = new THREE.MeshStandardMaterial({
           color: 0x06b6d4,
-          transparent: true,
-          opacity: 0.85,
+          roughness: 0.35,
+          emissive: 0x0e7490,
+          emissiveIntensity: 0.4,
         });
         const plateMesh = new THREE.Mesh(plateGeom, plateMat);
-        plateMesh.position.y = g * 0.07;
+        plateMesh.position.y = g * 0.065;
         plateMesh.rotation.z = Math.sin(g * 0.3) * 0.2;
         golgiGroup.add(plateMesh);
+      }
+
+      // Budding secretory vesicles
+      for (let v = 0; v < 6; v++) {
+        const vGeom = new THREE.SphereGeometry(0.04, 12, 12);
+        const vMat = new THREE.MeshBasicMaterial({ color: 0x67e8f9 });
+        const vMesh = new THREE.Mesh(vGeom, vMat);
+        vMesh.position.set((Math.random() - 0.5) * 0.5, 0.35 + Math.random() * 0.2, (Math.random() - 0.5) * 0.4);
+        golgiGroup.add(vMesh);
       }
 
       cellGroup.add(golgiGroup);
       organelleMeshesRef.current.push({ mesh: golgiGroup, organelle: golgiData });
     }
 
-    // 10. Plasmodesmata Channels
+    // 10. Plasmodesmata Channels traversing Cell Wall
     const plasmoData = CELL_ORGANELLES.find((o) => o.id === "plasmodesmata");
     if (plasmoData) {
       const plasmoGroup = new THREE.Group();
       plasmoGroup.position.set(...plasmoData.position3D);
 
       for (let p = 0; p < 8; p++) {
-        const poreGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.45, 12);
-        const poreMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+        const poreGeom = new THREE.CylinderGeometry(0.045, 0.045, 0.5, 12);
+        const poreMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xca8a04, emissiveIntensity: 0.5 });
         const poreMesh = new THREE.Mesh(poreGeom, poreMat);
         const theta = (p / 8) * Math.PI * 2;
-        poreMesh.position.set(Math.cos(theta) * 1.8, 0, Math.sin(theta) * 1.8);
+        poreMesh.position.set(Math.cos(theta) * 1.85, 0, Math.sin(theta) * 1.85);
+        poreMesh.rotation.z = Math.PI / 2;
+        poreMesh.rotation.y = theta;
         plasmoGroup.add(poreMesh);
       }
 
@@ -332,7 +426,7 @@ export default function PlantCell3D({
     };
     renderer.domElement.addEventListener("click", onPointerDown);
 
-    // 12. Animation Loop
+    // 12. Animation Loop with Smooth Camera Lerp & Turgor Micro-Pulse
     let clock = new THREE.Clock();
     let animId: number;
 
@@ -340,14 +434,18 @@ export default function PlantCell3D({
       animId = requestAnimationFrame(animate);
       const elapsed = clock.getElapsedTime();
 
+      // Smooth cinematic camera damping
+      camera.position.lerp(targetCamPosRef.current, 0.05);
+      controls.target.lerp(targetLookAtRef.current, 0.05);
       controls.update();
 
-      // Subtle cytoplasm streaming organelle micro-movement
-      if (chloroData && organelleMeshesRef.current) {
-        const chloroItem = organelleMeshesRef.current.find((i) => i.organelle.id === "chloroplast");
-        if (chloroItem) {
-          chloroItem.mesh.rotation.y = Math.sin(elapsed * 0.4) * 0.15;
-        }
+      // Idle cell slow orbit
+      cellGroup.rotation.y += 0.0015;
+
+      // Vacuole organic turgor fluid micro-pulse
+      if (vacuoleMeshRef.current) {
+        const pulse = 1.0 + Math.sin(elapsed * 1.2) * 0.015;
+        vacuoleMeshRef.current.scale.set(1.2 * pulse, 0.95 * pulse, 1.1 * pulse);
       }
 
       renderer.render(scene, camera);
@@ -385,7 +483,7 @@ export default function PlantCell3D({
           </span>
         </div>
         <span className="text-[11px] text-zinc-400 font-mono">
-          Click any organelle to zoom & inspect biochemical pathway
+          Click any organelle to zoom & inspect biochemical pathway (Thylakoid Grana, Cristae & Pores Active)
         </span>
       </div>
     </div>
